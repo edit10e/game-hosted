@@ -25,6 +25,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ isVerified: false });
     }
 
+    // Explicitly return isVerified as a boolean
     return NextResponse.json({ isVerified: Boolean(data.verify) });
   } catch (err: any) {
     return NextResponse.json({ isVerified: false }, { status: 500 });
