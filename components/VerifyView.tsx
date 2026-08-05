@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 
 // Bypass missing module type declarations for TypeScript
 declare module '@mediapipe/hands';
+declare module '@mediapipe/face_mesh';
 declare module '@mediapipe/camera_utils';
 
 type FingerChallenge = {
@@ -14,16 +15,15 @@ type FingerChallenge = {
 
 export default function VerifyView({ onVerified }: { onVerified: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [statusText, setStatusText] = useState<string>('กำลังเปิดกล้อง...');
+  const [statusText, setStatusText] = useState<string>('กำลังเปิดกล้องและระบบ AI สแกนหน้า...');
+  const [isLoadingModel, setIsLoadingModel] = useState<boolean>(true);
   const [isSuccess, setIsSuccess] = useState<boolean>(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [challenge, setChallenge] = useState<FingerChallenge | null>(null);
 
-  // Use ref to track countdown state inside MediaPipe async callbacks without stale closures
   const countdownRef = useRef<number | null>(null);
   countdownRef.current = countdown;
 
-  // Define possible random challenges
   const challenges: FingerChallenge[] = [
     {
       text: 'ชู 1 นิ้ว (ชี้)',
@@ -71,19 +71,24 @@ export default function VerifyView({ onVerified }: { onVerified: () => void }) {
 
     let camera: any = null;
     let hands: any = null;
+    let faceMesh: any = null;
     let timer: NodeJS.Timeout | null = null;
+
+    let faceDetected = false;
+    let handMatched = false;
 
     const loadMediaPipe = async () => {
       try {
         const { Hands } = await import('@mediapipe/hands');
+        const { FaceMesh } = await import('@mediapipe/face_mesh');
         const { Camera } = await import('@mediapipe/camera_utils');
 
         if (!videoRef.current) return;
 
+        // 1. Initialize Hands
         hands = new Hands({
           locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
         });
-
         hands.setOptions({
           maxNumHands: 1,
           modelComplexity: 1,
@@ -93,12 +98,10 @@ export default function VerifyView({ onVerified }: { onVerified: () => void }) {
 
         hands.onResults((results: any) => {
           if (isSuccess) return;
-
-          let isMatched = false;
+          handMatched = false;
 
           if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
             const landmarks = results.multiHandLandmarks[0];
-
             const thumbUp = Math.abs(landmarks[4].x - landmarks[17].x) > 0.1;
             const indexUp = landmarks[8].y < landmarks[6].y;
             const middleUp = landmarks[12].y < landmarks[10].y;
@@ -106,14 +109,49 @@ export default function VerifyView({ onVerified }: { onVerified: () => void }) {
             const pinkyUp = landmarks[20].y < landmarks[18].y;
 
             const fingersUpArray = [indexUp, middleUp, ringUp, pinkyUp];
-            isMatched = challenge.check(fingersUpArray, thumbUp);
+            handMatched = challenge.check(fingersUpArray, thumbUp);
           }
 
-          if (isMatched) {
-            // If hand is matched, start countdown if not already started
+          evaluateStatus();
+        });
+
+        // 2. Initialize Face Mesh
+        faceMesh = new FaceMesh({
+          locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
+        });
+        faceMesh.setOptions({
+          maxNumFaces: 1,
+          refineLandmarks: true,
+          minDetectionConfidence: 0.6,
+          minTrackingConfidence: 0.6,
+        });
+
+        faceMesh.onResults((results: any) => {
+          // Once face results arrive, mark loading as complete
+          setIsLoadingModel(false);
+          if (isSuccess) return;
+
+          faceDetected = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
+          evaluateStatus();
+        });
+
+        // Evaluation core logic (requires BOTH face and gesture)
+        const evaluateStatus = () => {
+          if (isSuccess) return;
+
+          if (!faceDetected) {
+            if (countdownRef.current !== null) {
+              if (timer) clearInterval(timer);
+              setCountdown(null);
+            }
+            setStatusText('⚠️ ไม่พบใบหน้า กรุณาหันหน้าเข้าหากล้อง');
+            return;
+          }
+
+          if (handMatched) {
             if (countdownRef.current === null) {
               setCountdown(3);
-              setStatusText('✨ คงท่านี้ไว้... กำลังนับถอยหลัง');
+              setStatusText('✨ พบใบหน้าและท่าทางถูกต้อง! กำลังนับถอยหลัง');
 
               timer = setInterval(() => {
                 setCountdown((prev) => {
@@ -121,7 +159,7 @@ export default function VerifyView({ onVerified }: { onVerified: () => void }) {
                   if (prev <= 1) {
                     if (timer) clearInterval(timer);
                     setIsSuccess(true);
-                    setStatusText('🎉 ยืนยันตัวตนสำเร็จ!');
+                    setStatusText('🎉 ยืนยันตัวตนสำเร็จผ่านระบบ Face & Hand AI!');
                     setTimeout(() => onVerified(), 600);
                     return 0;
                   }
@@ -130,18 +168,20 @@ export default function VerifyView({ onVerified }: { onVerified: () => void }) {
               }, 1000);
             }
           } else {
-            // If hand is lost or incorrect during countdown, RESET everything!
             if (countdownRef.current !== null) {
               if (timer) clearInterval(timer);
               setCountdown(null);
             }
-            setStatusText(`กรุณาทำตามคำสั่ง: ${challenge.text}`);
+            setStatusText(`${challenge.text}`);
           }
-        });
+        };
 
+        // Camera pipeline loop feeding both AI models
         camera = new Camera(videoRef.current, {
           onFrame: async () => {
             if (videoRef.current) {
+              // Send frame concurrently to face mesh and hands
+              await faceMesh.send({ image: videoRef.current });
               await hands.send({ image: videoRef.current });
             }
           },
@@ -151,6 +191,7 @@ export default function VerifyView({ onVerified }: { onVerified: () => void }) {
 
         await camera.start();
       } catch (err) {
+        setIsLoadingModel(false);
         setStatusText('ไม่สามารถเปิดกล้องได้ กรุณาอนุญาตสิทธิ์การใช้งานกล้อง');
       }
     };
@@ -171,10 +212,10 @@ export default function VerifyView({ onVerified }: { onVerified: () => void }) {
 
   return (
     <div className="flex flex-col items-center justify-center p-6 text-center">
-      <h2 className="text-2xl font-bold text-gray-800 mb-2">ยืนยันตัวตนด่วน</h2>
+      <h2 className="text-2xl font-bold text-gray-800 mb-2">ยืนยันตัวตนขั้นสูง</h2>
       
       <div className="mb-4 bg-indigo-50 border border-indigo-200 text-indigo-700 font-bold px-4 py-2 rounded-xl text-lg shadow-sm">
-        {challenge ? challenge.text : 'กำลังโหลดภารกิจ...'}
+        {challenge ? challenge.text : 'กำลังเตรียมภารกิจ...'}
       </div>
 
       <div className="relative w-72 h-72 rounded-2xl overflow-hidden shadow-lg border-4 border-indigo-500 bg-black flex items-center justify-center">
@@ -185,14 +226,22 @@ export default function VerifyView({ onVerified }: { onVerified: () => void }) {
           muted
         />
 
+        {/* Loading AI Models Overlay */}
+        {isLoadingModel && (
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-xs flex flex-col items-center justify-center text-white z-20">
+            <div className="w-10 h-10 border-4 border-indigo-400 border-t-transparent rounded-full animate-spin mb-3"></div>
+            <p className="text-xs font-medium tracking-wide">กำลังโหลดระบบสแกนใบหน้าและมือ...</p>
+          </div>
+        )}
+
         {/* Transparent Countdown Overlay */}
-        {countdown !== null && (
+        {countdown !== null && !isLoadingModel && (
           <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex flex-col items-center justify-center text-white z-10 transition-all">
             <span className="text-7xl font-extrabold text-green-400 drop-shadow-lg animate-pulse">
               {countdown > 0 ? countdown : '✓'}
             </span>
             <p className="mt-2 text-xs font-semibold tracking-wide bg-black/50 px-3 py-1 rounded-full">
-              ห้ามขยับมือออก ({countdown}s)
+              ห้ามขยับหน้าหรือเปลี่ยนมือ ({countdown}s)
             </p>
           </div>
         )}
