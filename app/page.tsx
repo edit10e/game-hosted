@@ -9,24 +9,32 @@ export default function Home() {
   const [isVerifiedUser, setIsVerifiedUser] = useState<boolean>(false);
   const [telegramId, setTelegramId] = useState<string | null>(null);
   const [accessDenied, setAccessDenied] = useState<boolean>(false);
+  const [isLoadingStatus, setIsLoadingStatus] = useState<boolean>(true);
 
   useEffect(() => {
-    // 1. Check official Telegram WebApp environment
     const tg = (window as any).Telegram?.WebApp;
     const tgUserId = tg?.initDataUnsafe?.user?.id;
-
-    // 2. Check URL query parameter (for test id or direct routing like ?id=12345)
     const params = new URLSearchParams(window.location.search);
     const queryId = params.get('id') || params.get('userId');
-
-    // Determine active target ID (prioritize Telegram SDK, fallback to URL test query param)
     const activeId = tgUserId ? String(tgUserId) : queryId;
 
     if (activeId) {
       setTelegramId(activeId);
+      
+      fetch(`/api/check-status?telegramId=${activeId}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.isVerified) {
+            setIsVerifiedUser(true);
+          }
+          setIsLoadingStatus(false);
+        })
+        .catch(() => {
+          setIsLoadingStatus(false);
+        });
     } else {
-      // If no valid Telegram context or test ID provided in URL, restrict access
       setAccessDenied(true);
+      setIsLoadingStatus(false);
     }
   }, []);
 
@@ -46,12 +54,19 @@ export default function Home() {
     );
   }
 
+  if (isLoadingStatus) {
+    return (
+      <main className="min-h-screen bg-white flex flex-col items-center justify-center px-6 text-center">
+        <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-3"></div>
+        <p className="text-sm text-gray-500">กำลังตรวจสอบสถานะการยืนยันตัวตน...</p>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-white flex flex-col justify-between px-6 py-8">
-      {/* Top Header / Branding */}
       <div className="max-w-md mx-auto w-full text-center pt-2">
-        <div className="inline-flex items-center justify-center w-14 h-14">
-        </div>
+        <div className="inline-flex items-center justify-center w-14 h-14"></div>
         <h1 className="text-3xl font-black tracking-tight text-gray-900">Game Hoster</h1>
         <p className="text-sm text-gray-400 mt-1">ระบบยืนยันตัวตน</p>
         {telegramId && (
@@ -61,7 +76,6 @@ export default function Home() {
         )}
       </div>
 
-      {/* Main Content Area */}
       <div className="max-w-md mx-auto w-full my-auto py-4">
         {currentView === 'home' ? (
           <div className="text-center space-y-6">
@@ -111,7 +125,6 @@ export default function Home() {
         )}
       </div>
 
-      {/* Bottom Sticky Action Button (Mobile First) */}
       <div className="max-w-md mx-auto w-full pb-4">
         {currentView === 'home' && !isVerifiedUser && (
           <button
