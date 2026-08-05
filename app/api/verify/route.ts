@@ -6,45 +6,37 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-export async function POST(request: Request) {
+export async function GET(request: Request) {
   try {
-    const { telegramId } = await request.json();
+    const { searchParams } = new URL(request.url);
+    const telegramId = searchParams.get('telegramId');
+
+    console.log('[CHECK-STATUS API] Incoming telegramId:', telegramId);
 
     if (!telegramId) {
-      return NextResponse.json({ success: false, message: 'Missing telegramId' }, { status: 400 });
+      console.log('[CHECK-STATUS API] Error: Missing telegramId parameter');
+      return NextResponse.json({ isVerified: false }, { status: 400 });
     }
 
-    const stringId = String(telegramId);
-
-    // 1. Check if the user already exists in the table
-    const { data: existingUser } = await supabase
+    const { data, error } = await supabase
       .from('user_verify')
-      .select('id')
-      .eq('telegram_id', stringId)
+      .select('verify, telegram_id')
+      .eq('telegram_id', String(telegramId))
       .maybeSingle();
 
-    let error;
+    console.log('[CHECK-STATUS API] Supabase query result:', { data, error });
 
-    if (existingUser) {
-      // 2. Update if they already exist
-      const res = await supabase
-        .from('user_verify')
-        .update({ verify: true })
-        .eq('telegram_id', stringId);
-      error = res.error;
-    } else {
-      // 3. Insert if they are new
-      const res = await supabase
-        .from('user_verify')
-        .insert([{ telegram_id: stringId, verify: true }]);
-      error = res.error;
+    if (error || !data) {
+      console.log('[CHECK-STATUS API] User not found or error occurred, isVerified: false');
+      return NextResponse.json({ isVerified: false });
     }
 
-    if (error) throw error;
+    const isVerified = !!data.verify;
+    console.log('[CHECK-STATUS API] Final resolved isVerified status:', isVerified);
 
-    return NextResponse.json({ success: true, message: 'Verified successfully' });
+    return NextResponse.json({ isVerified });
   } catch (err: any) {
-    console.error('Verify API Error:', err.message);
-    return NextResponse.json({ success: false, message: err.message }, { status: 500 });
+    console.error('[CHECK-STATUS API] Exception caught:', err.message);
+    return NextResponse.json({ isVerified: false }, { status: 500 });
   }
 }

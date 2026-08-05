@@ -13,6 +13,7 @@ export default function Home() {
 
   useEffect(() => {
     const tg = (window as any).Telegram?.WebApp;
+    // Safely extract Telegram user ID
     const tgUserId = tg?.initDataUnsafe?.user?.id;
     const params = new URLSearchParams(window.location.search);
     const queryId = params.get('id') || params.get('userId');
@@ -21,7 +22,10 @@ export default function Home() {
     if (activeId) {
       setTelegramId(activeId);
       
-      fetch(`/api/check-status?telegramId=${activeId}`)
+      // Fetch check-status with cache-busting to ensure fresh state after verification
+      fetch(`/api/check-status?telegramId=${activeId}&t=${Date.now()}`, {
+        cache: 'no-store',
+      })
         .then((res) => res.json())
         .then((data) => {
           if (data.isVerified) {
