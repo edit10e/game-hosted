@@ -14,21 +14,37 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, message: 'Missing telegramId' }, { status: 400 });
     }
 
-    // Using exact columns: telegram_id and verify
-    const { error } = await supabase
+    const stringId = String(telegramId);
+
+    // 1. Check if the user already exists in the table
+    const { data: existingUser } = await supabase
       .from('user_verify')
-      .upsert(
-        { 
-          telegram_id: String(telegramId), 
-          verify: true 
-        },
-        { onConflict: 'telegram_id' }
-      );
+      .select('id')
+      .eq('telegram_id', stringId)
+      .maybeSingle();
+
+    let error;
+
+    if (existingUser) {
+      // 2. Update if they already exist
+      const res = await supabase
+        .from('user_verify')
+        .update({ verify: true })
+        .eq('telegram_id', stringId);
+      error = res.error;
+    } else {
+      // 3. Insert if they are new
+      const res = await supabase
+        .from('user_verify')
+        .insert([{ telegram_id: stringId, verify: true }]);
+      error = res.error;
+    }
 
     if (error) throw error;
 
     return NextResponse.json({ success: true, message: 'Verified successfully' });
   } catch (err: any) {
+    console.error('Verify API Error:', err.message);
     return NextResponse.json({ success: false, message: err.message }, { status: 500 });
   }
 }
