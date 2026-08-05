@@ -14,21 +14,20 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, message: 'Missing telegramId' }, { status: 400 });
     }
 
-    // Update user status in Supabase database
+    // Using exact columns: telegram_id and verify
     const { error } = await supabase
-      .from('users')
-      .upsert({ 
-        telegram_id: String(telegramId), 
-        is_verified: true, 
-        verified_at: new Date() 
-      });
+      .from('user_verify')
+      .upsert(
+        { 
+          telegram_id: String(telegramId), 
+          verify: true 
+        },
+        { onConflict: 'telegram_id' }
+      );
 
     if (error) throw error;
 
-    // Optional: If you want the API to also un-mute the user in Telegram immediately upon success, 
-    // you can call the Telegram Bot API `restrictChatMember` or `unbanChatMember` here!
-
-    return NextResponse.json({ success: true, message: 'Verified successfully in database' });
+    return NextResponse.json({ success: true, message: 'Verified successfully' });
   } catch (err: any) {
     return NextResponse.json({ success: false, message: err.message }, { status: 500 });
   }
